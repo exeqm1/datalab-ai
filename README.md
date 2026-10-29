@@ -4,7 +4,7 @@ Plataforma interactiva para aprender, experimentar y visualizar conceptos matem�
 
 ---
 
-## 📐 Laboratorios Disponibles
+##  Laboratorios Disponibles
 
 ### 1. Descenso del Gradiente (1 Peso Escalar)
 Optimización analítica para $y = w \cdot x$ con pérdida cuadrática sobre un plano 2D $(w, L(w))$.
@@ -36,7 +36,7 @@ Optimización analítica para $y = w \cdot x$ con pérdida cuadrática sobre un 
 
 ---
 
-## 📁 Estructura del Proyecto
+##  Estructura del Proyecto
 
 ```text
 DataLabAI/
