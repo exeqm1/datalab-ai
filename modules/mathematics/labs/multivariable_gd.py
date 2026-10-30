@@ -22,8 +22,9 @@ Regla de actualización matricial:
 """
 
 from typing import Tuple, List, Optional
+import json
 import numpy as np
-import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
 
 # ==========================================
@@ -42,7 +43,6 @@ def get_default_dataset() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         [3.0, 2.0]
     ], dtype=float)
 
-    # W* exacto = [2.0, 3.0]
     W_opt = np.array([[2.0], [3.0]], dtype=float)
     Y = X @ W_opt  # [[8.0], [7.0], [12.0]]
     return X, Y, W_opt
@@ -63,7 +63,6 @@ def compute_mse_loss(X: np.ndarray, Y: np.ndarray, W: np.ndarray) -> float:
     Calcula el error cuadrático medio:
         L(W) = (1 / N) * sum((ŷ_i - y_i)^2) = (1 / N) * E^T · E
     """
-    N = X.shape[0]
     error = compute_residuals(X, Y, W)
     return float(np.mean(error ** 2))
 
@@ -99,8 +98,8 @@ def compute_loss_surface(
     Y: np.ndarray,
     w1_center: float = 2.0,
     w2_center: float = 3.0,
-    span: float = 3.5,
-    resolution: int = 40,
+    span: float = 4.0,
+    resolution: int = 35,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Calcula una malla (grid) para la superficie de pérdida 3D:
@@ -111,8 +110,6 @@ def compute_loss_surface(
     W1, W2 = np.meshgrid(w1_vals, w2_vals)
 
     Z = np.zeros_like(W1)
-    N = X.shape[0]
-
     for i in range(resolution):
         for j in range(resolution):
             w_candidate = np.array([[W1[i, j]], [W2[i, j]]])
@@ -123,564 +120,842 @@ def compute_loss_surface(
 
 
 # ==========================================
-# VISUALIZACIÓN 3D Y DE CONTORNO CON PLOTLY
+# INTERFAZ CLIENTE 60FPS (PLOTLY.JS EMBEDDED)
 # ==========================================
 
-def create_3d_loss_surface_chart(
-    X: np.ndarray,
-    Y: np.ndarray,
-    W_current: np.ndarray,
-    W_opt: np.ndarray,
-    trajectory: Optional[List[Tuple[float, float, float]]] = None,
-) -> go.Figure:
-    """
-    Genera la figura 3D interactiva del paraboloide de pérdida usando Plotly WebGL.
-    Permite rotación 360°, zoom e inspección espacial.
-    """
-    w1_curr = float(W_current[0, 0])
-    w2_curr = float(W_current[1, 0])
-    loss_curr = compute_mse_loss(X, Y, W_current)
+HTML_MULTIVARIABLE_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+        body {
+            background-color: #09090B;
+            color: #F4F4F5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+            overflow: hidden;
+            padding: 0 4px;
+        }
+        .shell {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-width: 100%;
+        }
 
-    w1_opt = float(W_opt[0, 0])
-    w2_opt = float(W_opt[1, 0])
+        /* Barra de título */
+        .top-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #1F1F24;
+            padding-bottom: 8px;
+        }
+        .top-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .title {
+            font-size: 1.05rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            color: #F4F4F5;
+        }
+        .badge {
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 0.7rem;
+            padding: 1px 6px;
+            border-radius: 4px;
+            background: #18181B;
+            border: 1px solid #27272A;
+            color: #A1A1AA;
+        }
+        .badge-opt {
+            color: #38BDF8;
+            border-color: #0369A1;
+            background: #082F49;
+            font-weight: 500;
+        }
 
-    span = max(abs(w1_curr - w1_opt) * 1.5, abs(w2_curr - w2_opt) * 1.5, 3.2)
-    W1, W2, Z = compute_loss_surface(X, Y, w1_center=w1_opt, w2_center=w2_opt, span=span, resolution=42)
+        /* Visor de Matrices Interactivo */
+        .matrix-board {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #0D0D11;
+            border: 1px solid #1F1F24;
+            border-radius: 6px;
+            padding: 8px 12px;
+            overflow-x: auto;
+        }
+        .matrix-box {
+            background: #121216;
+            border: 1px solid #27272A;
+            border-radius: 5px;
+            padding: 6px 10px;
+            font-family: ui-monospace, monospace;
+            font-size: 0.76rem;
+            min-width: 80px;
+        }
+        .matrix-box.active-w {
+            border-color: #3B82F6;
+        }
+        .matrix-label {
+            font-size: 0.65rem;
+            color: #71717A;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+        .matrix-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            color: #E4E4E7;
+            line-height: 1.35;
+        }
+        .matrix-op {
+            font-size: 1.1rem;
+            color: #71717A;
+            font-weight: 500;
+        }
 
-    fig = go.Figure()
+        /* Layout en 2 columnas */
+        .workspace {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr;
+            gap: 14px;
+            align-items: start;
+        }
 
-    # 1. Superficie paraboloide 3D
-    fig.add_trace(
-        go.Surface(
-            x=W1,
-            y=W2,
-            z=Z,
-            colorscale="Viridis",
-            opacity=0.82,
-            showscale=False,
-            contours=dict(
-                z=dict(
-                    show=True,
-                    usecolormap=True,
-                    highlightcolor="#F4F4F5",
-                    project=dict(z=True),  # Proyección de curvas de nivel en el plano base
-                )
-            ),
-            hovertemplate="w1: %{x:.2f}<br>w2: %{y:.2f}<br>Pérdida L: %{z:.2f}<extra></extra>",
-        )
-    )
+        /* Columna izquierda: Gráfico */
+        .chart-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .chart-box {
+            background: #0D0D11;
+            border: 1px solid #1F1F24;
+            border-radius: 8px;
+            padding: 4px;
+            position: relative;
+        }
+        #plotDiv {
+            width: 100%;
+            height: 340px;
+        }
 
-    # 2. Mínimo analítico global (fondo del cuenco)
-    fig.add_trace(
-        go.Scatter3d(
-            x=[w1_opt],
-            y=[w2_opt],
-            z=[0.0],
-            mode="markers+text",
-            name="Mínimo W*",
-            marker=dict(size=7, color="#38BDF8", symbol="diamond"),
-            text=["W* (Óptimo)"],
-            textposition="top center",
-            textfont=dict(color="#38BDF8", size=11, family="monospace"),
-            hoverinfo="skip",
-        )
-    )
+        .math-banner {
+            background: #121216;
+            border: 1px solid #1F1F24;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 0.78rem;
+            color: #A1A1AA;
+            line-height: 1.4;
+        }
+        .math-banner code {
+            font-family: ui-monospace, monospace;
+            color: #F4F4F5;
+            background: #18181B;
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
 
-    # 3. Trayectoria de pasos si existe historial
-    if trajectory and len(trajectory) > 1:
-        traj_w1 = [p[0] for p in trajectory]
-        traj_w2 = [p[1] for p in trajectory]
-        traj_loss = [p[2] for p in trajectory]
+        /* Columna derecha: Controles y Métricas */
+        .controls-panel {
+            background: #121216;
+            border: 1px solid #1F1F24;
+            border-radius: 8px;
+            padding: 12px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
 
-        fig.add_trace(
-            go.Scatter3d(
-                x=traj_w1,
-                y=traj_w2,
-                z=traj_loss,
-                mode="lines+markers",
-                name="Trayectoria",
-                line=dict(color="#10B981", width=5),
-                marker=dict(size=4, color="#10B981"),
-                hoverinfo="skip",
-            )
-        )
+        .view-toggle {
+            display: flex;
+            gap: 6px;
+            background: #09090B;
+            border: 1px solid #27272A;
+            border-radius: 6px;
+            padding: 2px;
+        }
+        .view-btn {
+            flex: 1;
+            font-size: 0.74rem;
+            font-weight: 600;
+            padding: 5px 8px;
+            background: transparent;
+            color: #71717A;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .view-btn.active {
+            background: #18181B;
+            color: #F4F4F5;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+        }
 
-    # 4. Posición actual (w1, w2, L)
-    fig.add_trace(
-        go.Scatter3d(
-            x=[w1_curr],
-            y=[w2_curr],
-            z=[loss_curr],
-            mode="markers+text",
-            name="Posición actual W",
-            marker=dict(
-                size=9,
-                color="#EF4444",
-                symbol="circle",
-                line=dict(color="#FFFFFF", width=2),
-            ),
-            text=[f"W = [{w1_curr:.2f}, {w2_curr:.2f}]"],
-            textposition="top center",
-            textfont=dict(color="#F4F4F5", size=11, family="monospace"),
-            hovertemplate=f"Actual:<br>w1: {w1_curr:.3f}<br>w2: {w2_curr:.3f}<br>L(W): {loss_curr:.3f}<extra></extra>",
-        )
-    )
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        }
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.76rem;
+            color: #A1A1AA;
+            font-weight: 500;
+        }
+        .slider-val {
+            font-family: ui-monospace, monospace;
+            font-size: 0.76rem;
+            color: #F4F4F5;
+            background: #18181B;
+            padding: 1px 5px;
+            border-radius: 3px;
+            border: 1px solid #27272A;
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 4px;
+            background: #27272A;
+            border-radius: 2px;
+            outline: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: #F4F4F5;
+            cursor: pointer;
+            border: 2px solid #09090B;
+        }
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #3B82F6;
+            transform: scale(1.15);
+        }
 
-    # Configuración de diseño y cámara oscura tipo Linear / Vercel
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#09090B",
-        scene=dict(
-            bgcolor="#09090B",
-            xaxis=dict(
-                title=dict(text="Peso w1", font=dict(color="#A1A1AA", size=11)),
-                gridcolor="#1F1F24",
-                zerolinecolor="#27272A",
-                backgroundcolor="#09090B",
-                showbackground=False,
-                tickfont=dict(color="#71717A", size=9),
-            ),
-            yaxis=dict(
-                title=dict(text="Peso w2", font=dict(color="#A1A1AA", size=11)),
-                gridcolor="#1F1F24",
-                zerolinecolor="#27272A",
-                backgroundcolor="#09090B",
-                showbackground=False,
-                tickfont=dict(color="#71717A", size=9),
-            ),
-            zaxis=dict(
-                title=dict(text="Pérdida L(W)", font=dict(color="#A1A1AA", size=11)),
-                gridcolor="#1F1F24",
-                zerolinecolor="#27272A",
-                backgroundcolor="#09090B",
-                showbackground=False,
-                tickfont=dict(color="#71717A", size=9),
-            ),
-            camera=dict(
-                eye=dict(x=1.5, y=-1.6, z=1.2),
-            ),
-        ),
-        margin=dict(l=10, r=10, t=10, b=10),
-        height=390,
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=0.02,
-            xanchor="center",
-            x=0.5,
-            font=dict(color="#A1A1AA", size=10),
-        ),
-    )
+        .action-row {
+            display: grid;
+            grid-template-columns: 1.35fr 1fr;
+            gap: 8px;
+            margin-top: 2px;
+        }
+        button.action-btn {
+            font-family: inherit;
+            font-size: 0.78rem;
+            font-weight: 600;
+            padding: 7px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .btn-run {
+            background: #F4F4F5;
+            color: #09090B;
+            border: 1px solid #F4F4F5;
+        }
+        .btn-run:hover {
+            background: #FFFFFF;
+            box-shadow: 0 0 8px rgba(255, 255, 255, 0.2);
+        }
+        .btn-reset {
+            background: #18181B;
+            color: #D4D4D8;
+            border: 1px solid #27272A;
+        }
+        .btn-reset:hover {
+            border-color: #3F3F46;
+            color: #FFFFFF;
+        }
 
-    return fig
+        /* Cuadrícula de métricas */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+        }
+        .metric-cell {
+            background: #0D0D11;
+            border: 1px solid #1F1F24;
+            border-radius: 5px;
+            padding: 6px 8px;
+        }
+        .metric-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #71717A;
+            font-weight: 600;
+        }
+        .metric-val {
+            font-family: ui-monospace, monospace;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #F4F4F5;
+            margin-top: 1px;
+        }
+        .metric-sub {
+            font-size: 0.68rem;
+            color: #71717A;
+            font-family: ui-monospace, monospace;
+        }
 
+        /* Tarjeta de paso */
+        .step-info {
+            background: #0D0D11;
+            border: 1px solid #1F1F24;
+            border-left: 3px solid #3B82F6;
+            border-radius: 5px;
+            padding: 6px 10px;
+            font-size: 0.74rem;
+            color: #D4D4D8;
+            display: none;
+        }
+        .step-info code {
+            font-family: ui-monospace, monospace;
+            color: #38BDF8;
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <!-- Encabezado -->
+        <div class="top-row">
+            <div class="top-left">
+                <span class="title">Álgebra Matricial y Superficie 3D</span>
+                <span class="badge">N=3 &bull; D=2</span>
+                <span class="badge">ŷ = X · W</span>
+            </div>
+            <span class="badge badge-opt">W* óptimo = [2.00, 3.00]ᵀ</span>
+        </div>
 
-def create_contour_loss_chart(
-    X: np.ndarray,
-    Y: np.ndarray,
-    W_current: np.ndarray,
-    W_opt: np.ndarray,
-    grad_current: np.ndarray,
-    trajectory: Optional[List[Tuple[float, float, float]]] = None,
-) -> go.Figure:
-    """
-    Genera el mapa de curvas de nivel 2D (visión cenital) del paraboloide,
-    mostrando el vector gradiente ∇L perpendicular a las líneas de nivel.
-    """
-    w1_curr = float(W_current[0, 0])
-    w2_curr = float(W_current[1, 0])
-    w1_opt = float(W_opt[0, 0])
-    w2_opt = float(W_opt[1, 0])
+        <!-- Visor de Matrices Interactivo -->
+        <div class="matrix-board">
+            <!-- Matriz X -->
+            <div class="matrix-box">
+                <div class="matrix-label">Matriz X (3&times;2)</div>
+                <div class="matrix-row"><span>1.0</span><span>2.0</span></div>
+                <div class="matrix-row"><span>2.0</span><span>1.0</span></div>
+                <div class="matrix-row"><span>3.0</span><span>2.0</span></div>
+            </div>
 
-    span = max(abs(w1_curr - w1_opt) * 1.5, abs(w2_curr - w2_opt) * 1.5, 3.2)
-    W1, W2, Z = compute_loss_surface(X, Y, w1_center=w1_opt, w2_center=w2_opt, span=span, resolution=50)
+            <div class="matrix-op">&times;</div>
 
-    fig = go.Figure()
+            <!-- Vector W -->
+            <div class="matrix-box active-w">
+                <div class="matrix-label" style="color: #3B82F6;">W (2&times;1)</div>
+                <div class="matrix-row"><span id="mW1" style="color: #38BDF8; font-weight: 600;">__INIT_W1__</span></div>
+                <div class="matrix-row"><span id="mW2" style="color: #38BDF8; font-weight: 600;">__INIT_W2__</span></div>
+            </div>
 
-    # 1. Curvas de nivel
-    fig.add_trace(
-        go.Contour(
-            x=W1[0, :],
-            y=W2[:, 0],
-            z=Z,
-            colorscale="Viridis",
-            contours=dict(
-                coloring="heatmap",
-                showlabels=True,
-                labelfont=dict(size=9, color="#F4F4F5"),
-            ),
-            showscale=False,
-            hovertemplate="w1: %{x:.2f}<br>w2: %{y:.2f}<br>L(W): %{z:.2f}<extra></extra>",
-        )
-    )
+            <div class="matrix-op">=</div>
 
-    # 2. Óptimo
-    fig.add_trace(
-        go.Scatter(
-            x=[w1_opt],
-            y=[w2_opt],
-            mode="markers+text",
-            name="Óptimo W*",
-            marker=dict(size=10, color="#38BDF8", symbol="diamond"),
-            text=["W* = [2, 3]"],
-            textposition="top center",
-            textfont=dict(color="#38BDF8", size=11, family="monospace"),
-            hoverinfo="skip",
-        )
-    )
+            <!-- Vector ŷ -->
+            <div class="matrix-box">
+                <div class="matrix-label">Pred ŷ (3&times;1)</div>
+                <div class="matrix-row"><span id="mYp1">0.00</span></div>
+                <div class="matrix-row"><span id="mYp2">0.00</span></div>
+                <div class="matrix-row"><span id="mYp3">0.00</span></div>
+            </div>
 
-    # 3. Trayectoria histórica
-    if trajectory and len(trajectory) > 1:
-        traj_w1 = [p[0] for p in trajectory]
-        traj_w2 = [p[1] for p in trajectory]
-        fig.add_trace(
-            go.Scatter(
-                x=traj_w1,
-                y=traj_w2,
-                mode="lines+markers",
-                name="Trayectoria",
-                line=dict(color="#10B981", width=2.5, dash="dot"),
-                marker=dict(size=5, color="#10B981"),
-                hoverinfo="skip",
-            )
-        )
+            <div class="matrix-op">vs</div>
 
-    # 4. Vector gradiente (flecha que apunta hacia el máximo ascenso)
-    g1 = float(grad_current[0, 0])
-    g2 = float(grad_current[1, 0])
-    g_norm = np.sqrt(g1**2 + g2**2)
-    if g_norm > 1e-4:
-        # Escalamos la flecha visualmente para que sea legible en la gráfica
-        arrow_len = min(span * 0.22, 1.0)
-        u1 = (g1 / g_norm) * arrow_len
-        u2 = (g2 / g_norm) * arrow_len
+            <!-- Vector Y -->
+            <div class="matrix-box">
+                <div class="matrix-label">Obj Y (3&times;1)</div>
+                <div class="matrix-row"><span>8.0</span></div>
+                <div class="matrix-row"><span>7.0</span></div>
+                <div class="matrix-row"><span>12.0</span></div>
+            </div>
 
-        fig.add_annotation(
-            x=w1_curr + u1,
-            y=w2_curr + u2,
-            ax=w1_curr,
-            ay=w2_curr,
-            xref="x",
-            yref="y",
-            axref="x",
-            ayref="y",
-            showarrow=True,
-            arrowhead=2,
-            arrowsize=1.3,
-            arrowwidth=2.2,
-            arrowcolor="#F59E0B",
-            text="∇L",
-            font=dict(color="#F59E0B", size=12, family="monospace"),
-        )
+            <div class="matrix-op">&rarr;</div>
 
-    # 5. Punto actual
-    fig.add_trace(
-        go.Scatter(
-            x=[w1_curr],
-            y=[w2_curr],
-            mode="markers+text",
-            name="W actual",
-            marker=dict(
-                size=12,
-                color="#EF4444",
-                line=dict(color="#FFFFFF", width=2),
-            ),
-            text=[f"W = [{w1_curr:.2f}, {w2_curr:.2f}]"],
-            textposition="bottom center",
-            textfont=dict(color="#F4F4F5", size=10, family="monospace"),
-            hoverinfo="skip",
-        )
-    )
+            <!-- Vector E -->
+            <div class="matrix-box">
+                <div class="matrix-label" style="color: #F87171;">Error E (3&times;1)</div>
+                <div class="matrix-row"><span id="mE1" style="color: #F87171;">+0.00</span></div>
+                <div class="matrix-row"><span id="mE2" style="color: #F87171;">+0.00</span></div>
+                <div class="matrix-row"><span id="mE3" style="color: #F87171;">+0.00</span></div>
+            </div>
+        </div>
 
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#09090B",
-        plot_bgcolor="#09090B",
-        margin=dict(l=35, r=15, t=20, b=35),
-        height=390,
-        showlegend=True,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=-0.22,
-            xanchor="center",
-            x=0.5,
-            font=dict(color="#A1A1AA", size=10),
-        ),
-        xaxis=dict(
-            title=dict(text="Peso w1", font=dict(color="#A1A1AA", size=11)),
-            gridcolor="#1F1F24",
-            zerolinecolor="#27272A",
-            tickfont=dict(color="#71717A", size=9),
-        ),
-        yaxis=dict(
-            title=dict(text="Peso w2", font=dict(color="#A1A1AA", size=11)),
-            gridcolor="#1F1F24",
-            zerolinecolor="#27272A",
-            tickfont=dict(color="#71717A", size=9),
-        ),
-    )
+        <!-- Área de Trabajo -->
+        <div class="workspace">
+            <!-- Gráfica 3D / 2D -->
+            <div class="chart-panel">
+                <div class="chart-box">
+                    <div id="plotDiv"></div>
+                </div>
+                <div class="math-banner">
+                    <b>Gradiente Matricial:</b> <code>∇_W L = (2/3) · Xᵀ · E</code><br>
+                    <span id="gradText">∇ = [0.00, 0.00]ᵀ</span> &bull; 
+                    Regla: <code>W ← W - α · ∇L</code> actualiza ambos pesos en el cuenco 3D.
+                </div>
+            </div>
 
-    return fig
+            <!-- Controles y Métricas -->
+            <div class="controls-panel">
+                <!-- Selector de Vista -->
+                <div class="view-toggle">
+                    <button class="view-btn active" id="btnView3D">3D (Superficie)</button>
+                    <button class="view-btn" id="btnView2D">2D (Contorno)</button>
+                </div>
 
+                <!-- Sliders -->
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Peso w1</span>
+                        <span class="slider-val" id="valW1">__INIT_W1__</span>
+                    </div>
+                    <input type="range" id="sliderW1" min="-1.5" max="5.5" step="0.02" value="__INIT_W1__">
+                </div>
 
-# ==========================================
-# INTERFAZ STREAMLIT DEL LABORATORIO 2
-# ==========================================
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Peso w2</span>
+                        <span class="slider-val" id="valW2">__INIT_W2__</span>
+                    </div>
+                    <input type="range" id="sliderW2" min="-1.0" max="6.5" step="0.02" value="__INIT_W2__">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-header">
+                        <span>Tasa de aprendizaje (α)</span>
+                        <span class="slider-val" id="valAlpha">__INIT_ALPHA__</span>
+                    </div>
+                    <input type="range" id="sliderAlpha" min="0.005" max="0.20" step="0.005" value="__INIT_ALPHA__">
+                </div>
+
+                <!-- Botones -->
+                <div class="action-row">
+                    <button class="action-btn btn-run" id="btnStepMat">Ejecutar paso</button>
+                    <button class="action-btn btn-reset" id="btnResetMat">Reiniciar</button>
+                </div>
+
+                <!-- Métricas 2x2 -->
+                <div class="metrics-grid">
+                    <div class="metric-cell">
+                        <div class="metric-label">Pérdida MSE</div>
+                        <div class="metric-val" id="metricMse">0.00</div>
+                        <div class="metric-sub" id="metricDist">dist: 0.00</div>
+                    </div>
+                    <div class="metric-cell">
+                        <div class="metric-label">||∇L|| Magnitud</div>
+                        <div class="metric-val" id="metricGradNorm">0.00</div>
+                        <div class="metric-sub" id="metricGradShort">[0.0, 0.0]</div>
+                    </div>
+                </div>
+
+                <!-- Detalle del paso -->
+                <div class="step-info" id="stepBox">
+                    <div style="font-size: 0.68rem; text-transform: uppercase; color: #71717A; font-weight: 600;">Paso Matricial</div>
+                    <div id="stepFormula" style="margin: 2px 0;"></div>
+                    <div id="stepLossDiff" style="color: #A1A1AA; font-size: 0.7rem;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Datos matemáticos fijos
+        const X_mat = [[1.0, 2.0], [2.0, 1.0], [3.0, 2.0]];
+        const Y_vec = [8.0, 7.0, 12.0];
+        const W_opt = [2.0, 3.0];
+
+        // Malla precalculada en Python
+        const gridW1 = __GRID_W1__;
+        const gridW2 = __GRID_W2__;
+        const gridZ  = __GRID_Z__;
+
+        let curW1 = __INIT_W1__;
+        let curW2 = __INIT_W2__;
+        let curAlpha = __INIT_ALPHA__;
+        let currentMode = '3D';
+        let trajectory = [[curW1, curW2, computeLoss(curW1, curW2)]];
+
+        // Elementos DOM
+        const sliderW1 = document.getElementById('sliderW1');
+        const sliderW2 = document.getElementById('sliderW2');
+        const sliderAlpha = document.getElementById('sliderAlpha');
+        const valW1 = document.getElementById('valW1');
+        const valW2 = document.getElementById('valW2');
+        const valAlpha = document.getElementById('valAlpha');
+        const mW1 = document.getElementById('mW1');
+        const mW2 = document.getElementById('mW2');
+        const mYp1 = document.getElementById('mYp1');
+        const mYp2 = document.getElementById('mYp2');
+        const mYp3 = document.getElementById('mYp3');
+        const mE1 = document.getElementById('mE1');
+        const mE2 = document.getElementById('mE2');
+        const mE3 = document.getElementById('mE3');
+        const metricMse = document.getElementById('metricMse');
+        const metricDist = document.getElementById('metricDist');
+        const metricGradNorm = document.getElementById('metricGradNorm');
+        const metricGradShort = document.getElementById('metricGradShort');
+        const gradText = document.getElementById('gradText');
+        const btnStepMat = document.getElementById('btnStepMat');
+        const btnResetMat = document.getElementById('btnResetMat');
+        const btnView3D = document.getElementById('btnView3D');
+        const btnView2D = document.getElementById('btnView2D');
+        const stepBox = document.getElementById('stepBox');
+        const stepFormula = document.getElementById('stepFormula');
+        const stepLossDiff = document.getElementById('stepLossDiff');
+
+        function computePred(w1, w2) {
+            return [
+                X_mat[0][0] * w1 + X_mat[0][1] * w2,
+                X_mat[1][0] * w1 + X_mat[1][1] * w2,
+                X_mat[2][0] * w1 + X_mat[2][1] * w2,
+            ];
+        }
+
+        function computeResiduals(w1, w2) {
+            const yP = computePred(w1, w2);
+            return [yP[0] - Y_vec[0], yP[1] - Y_vec[1], yP[2] - Y_vec[2]];
+        }
+
+        function computeLoss(w1, w2) {
+            const e = computeResiduals(w1, w2);
+            return (e[0]*e[0] + e[1]*e[1] + e[2]*e[2]) / 3.0;
+        }
+
+        function computeGrad(w1, w2) {
+            const e = computeResiduals(w1, w2);
+            // ∇ = (2/3) * X^T * e
+            const g1 = (2.0 / 3.0) * (X_mat[0][0]*e[0] + X_mat[1][0]*e[1] + X_mat[2][0]*e[2]);
+            const g2 = (2.0 / 3.0) * (X_mat[0][1]*e[0] + X_mat[1][1]*e[1] + X_mat[2][1]*e[2]);
+            return [g1, g2];
+        }
+
+        // Inicialización de Gráficas con Plotly.js (WebGL)
+        function initPlot3D() {
+            const lossCurr = computeLoss(curW1, curW2);
+
+            const surfaceTrace = {
+                type: 'surface',
+                x: gridW1,
+                y: gridW2,
+                z: gridZ,
+                colorscale: 'Viridis',
+                opacity: 0.85,
+                showscale: false,
+                contours: {
+                    z: { show: true, usecolormap: true, project: { z: true } }
+                },
+                hovertemplate: 'w1: %{x:.2f}<br>w2: %{y:.2f}<br>L: %{z:.2f}<extra></extra>'
+            };
+
+            const optTrace = {
+                type: 'scatter3d',
+                x: [W_opt[0]],
+                y: [W_opt[1]],
+                z: [0.0],
+                mode: 'markers+text',
+                name: 'Óptimo W*',
+                marker: { size: 6, color: '#38BDF8', symbol: 'diamond' },
+                text: ['W*'],
+                textposition: 'top center',
+                hoverinfo: 'skip'
+            };
+
+            const trajTrace = {
+                type: 'scatter3d',
+                x: trajectory.map(p => p[0]),
+                y: trajectory.map(p => p[1]),
+                z: trajectory.map(p => p[2]),
+                mode: 'lines+markers',
+                name: 'Trayectoria',
+                line: { color: '#10B981', width: 4 },
+                marker: { size: 3, color: '#10B981' },
+                hoverinfo: 'skip'
+            };
+
+            const pointTrace = {
+                type: 'scatter3d',
+                x: [curW1],
+                y: [curW2],
+                z: [lossCurr],
+                mode: 'markers',
+                name: 'W actual',
+                marker: { size: 8, color: '#EF4444', line: { color: '#FFFFFF', width: 2 } },
+                hovertemplate: 'Actual:<br>w1: %{x:.2f}<br>w2: %{y:.2f}<br>L: %{z:.2f}<extra></extra>'
+            };
+
+            const layout = {
+                template: 'plotly_dark',
+                paper_bgcolor: '#09090B',
+                scene: {
+                    bgcolor: '#09090B',
+                    xaxis: { title: { text: 'w1', font: { color: '#A1A1AA', size: 10 } }, gridcolor: '#1F1F24', tickfont: { size: 8 } },
+                    yaxis: { title: { text: 'w2', font: { color: '#A1A1AA', size: 10 } }, gridcolor: '#1F1F24', tickfont: { size: 8 } },
+                    zaxis: { title: { text: 'L(W)', font: { color: '#A1A1AA', size: 10 } }, gridcolor: '#1F1F24', tickfont: { size: 8 } },
+                    camera: { eye: { x: 1.45, y: -1.55, z: 1.15 } }
+                },
+                margin: { l: 0, r: 0, t: 0, b: 0 },
+                showlegend: false
+            };
+
+            Plotly.newPlot('plotDiv', [surfaceTrace, optTrace, trajTrace, pointTrace], layout, { displayModeBar: false, responsive: true });
+        }
+
+        function initPlot2D() {
+            const lossCurr = computeLoss(curW1, curW2);
+
+            const contourTrace = {
+                type: 'contour',
+                x: gridW1[0],
+                y: gridW2.map(row => row[0]),
+                z: gridZ,
+                colorscale: 'Viridis',
+                showscale: false,
+                contours: { coloring: 'heatmap', showlabels: true, labelfont: { size: 8, color: '#F4F4F5' } },
+                hovertemplate: 'w1: %{x:.2f}<br>w2: %{y:.2f}<br>L: %{z:.2f}<extra></extra>'
+            };
+
+            const optTrace = {
+                type: 'scatter',
+                x: [W_opt[0]],
+                y: [W_opt[1]],
+                mode: 'markers+text',
+                name: 'Óptimo W*',
+                marker: { size: 8, color: '#38BDF8', symbol: 'diamond' },
+                text: ['W*'],
+                textposition: 'top center',
+                hoverinfo: 'skip'
+            };
+
+            const trajTrace = {
+                type: 'scatter',
+                x: trajectory.map(p => p[0]),
+                y: trajectory.map(p => p[1]),
+                mode: 'lines+markers',
+                name: 'Trayectoria',
+                line: { color: '#10B981', width: 2, dash: 'dot' },
+                marker: { size: 4, color: '#10B981' },
+                hoverinfo: 'skip'
+            };
+
+            const pointTrace = {
+                type: 'scatter',
+                x: [curW1],
+                y: [curW2],
+                mode: 'markers',
+                name: 'W actual',
+                marker: { size: 10, color: '#EF4444', line: { color: '#FFFFFF', width: 2 } },
+                hoverinfo: 'skip'
+            };
+
+            const layout = {
+                template: 'plotly_dark',
+                paper_bgcolor: '#09090B',
+                plot_bgcolor: '#09090B',
+                xaxis: { title: { text: 'Peso w1', font: { color: '#A1A1AA', size: 10 } }, gridcolor: '#1F1F24', tickfont: { size: 8 } },
+                yaxis: { title: { text: 'Peso w2', font: { color: '#A1A1AA', size: 10 } }, gridcolor: '#1F1F24', tickfont: { size: 8 } },
+                margin: { l: 30, r: 10, t: 10, b: 30 },
+                showlegend: false
+            };
+
+            Plotly.newPlot('plotDiv', [contourTrace, optTrace, trajTrace, pointTrace], layout, { displayModeBar: false, responsive: true });
+        }
+
+        // Actualización Instantánea (0 ms - 60 FPS)
+        function updateUI() {
+            const yp = computePred(curW1, curW2);
+            const e = computeResiduals(curW1, curW2);
+            const loss = computeLoss(curW1, curW2);
+            const g = computeGrad(curW1, curW2);
+            const gNorm = Math.sqrt(g[0]*g[0] + g[1]*g[1]);
+            const distOpt = Math.sqrt((curW1 - W_opt[0])**2 + (curW2 - W_opt[1])**2);
+
+            // 1. Textos y Sliders
+            valW1.textContent = curW1.toFixed(2);
+            valW2.textContent = curW2.toFixed(2);
+            valAlpha.textContent = curAlpha.toFixed(3);
+            mW1.textContent = curW1.toFixed(2);
+            mW2.textContent = curW2.toFixed(2);
+
+            // 2. Valores en la Matriz
+            mYp1.textContent = yp[0].toFixed(2);
+            mYp2.textContent = yp[1].toFixed(2);
+            mYp3.textContent = yp[2].toFixed(2);
+            mE1.textContent = (e[0] >= 0 ? '+' : '') + e[0].toFixed(2);
+            mE2.textContent = (e[1] >= 0 ? '+' : '') + e[1].toFixed(2);
+            mE3.textContent = (e[2] >= 0 ? '+' : '') + e[2].toFixed(2);
+
+            // 3. Métricas
+            metricMse.textContent = loss.toFixed(2);
+            metricDist.textContent = 'dist: ' + distOpt.toFixed(2);
+            metricGradNorm.textContent = gNorm.toFixed(2);
+            metricGradShort.textContent = '[' + (g[0]>=0?'+':'') + g[0].toFixed(1) + ', ' + (g[1]>=0?'+':'') + g[1].toFixed(1) + ']';
+            gradText.innerHTML = '∇ = [' + (g[0]>=0?'+':'') + g[0].toFixed(2) + ', ' + (g[1]>=0?'+':'') + g[1].toFixed(2) + ']ᵀ';
+
+            // 4. Actualización ultrarrápida del punto en WebGL (sin redibujar la superficie)
+            if (currentMode === '3D') {
+                Plotly.restyle('plotDiv', {
+                    x: [[curW1]],
+                    y: [[curW2]],
+                    z: [[loss]]
+                }, [3]);
+
+                // Actualizar línea de trayectoria
+                Plotly.restyle('plotDiv', {
+                    x: [trajectory.map(p => p[0])],
+                    y: [trajectory.map(p => p[1])],
+                    z: [trajectory.map(p => p[2])]
+                }, [2]);
+            } else {
+                Plotly.restyle('plotDiv', {
+                    x: [[curW1]],
+                    y: [[curW2]]
+                }, [3]);
+
+                Plotly.restyle('plotDiv', {
+                    x: [trajectory.map(p => p[0])],
+                    y: [trajectory.map(p => p[1])]
+                }, [2]);
+            }
+        }
+
+        // Eventos de sliders (reactivos en vivo a 60 FPS)
+        sliderW1.addEventListener('input', (e) => {
+            curW1 = parseFloat(e.target.value);
+            trajectory = [[curW1, curW2, computeLoss(curW1, curW2)]];
+            stepBox.style.display = 'none';
+            updateUI();
+        });
+
+        sliderW2.addEventListener('input', (e) => {
+            curW2 = parseFloat(e.target.value);
+            trajectory = [[curW1, curW2, computeLoss(curW1, curW2)]];
+            stepBox.style.display = 'none';
+            updateUI();
+        });
+
+        sliderAlpha.addEventListener('input', (e) => {
+            curAlpha = parseFloat(e.target.value);
+            valAlpha.textContent = curAlpha.toFixed(3);
+        });
+
+        // Alternar vista 3D / 2D
+        btnView3D.addEventListener('click', () => {
+            if (currentMode !== '3D') {
+                currentMode = '3D';
+                btnView3D.classList.add('active');
+                btnView2D.classList.remove('active');
+                initPlot3D();
+                updateUI();
+            }
+        });
+
+        btnView2D.addEventListener('click', () => {
+            if (currentMode !== '2D') {
+                currentMode = '2D';
+                btnView2D.classList.add('active');
+                btnView3D.classList.remove('active');
+                initPlot2D();
+                updateUI();
+            }
+        });
+
+        // Ejecutar paso con animación fluida
+        btnStepMat.addEventListener('click', () => {
+            const g = computeGrad(curW1, curW2);
+            const lBefore = computeLoss(curW1, curW2);
+            const nextW1 = curW1 - curAlpha * g[0];
+            const nextW2 = curW2 - curAlpha * g[1];
+            const lAfter = computeLoss(nextW1, nextW2);
+
+            stepBox.style.display = 'block';
+            stepFormula.innerHTML = `W_nuevo = [${curW1.toFixed(2)}, ${curW2.toFixed(2)}]ᵀ - ${curAlpha.toFixed(2)} &times; ∇ = <code>[${nextW1.toFixed(2)}, ${nextW2.toFixed(2)}]ᵀ</code>`;
+            const dL = lAfter - lBefore;
+            stepLossDiff.innerHTML = `L: <b>${lBefore.toFixed(2)}</b> &rarr; <b>${lAfter.toFixed(2)}</b> (ΔL: <span style="color: ${dL <= 0 ? '#10B981' : '#EF4444'};">${dL >= 0 ? '+' : ''}${dL.toFixed(2)}</span>)`;
+
+            // Animación suave de 180ms
+            const startW1 = curW1;
+            const startW2 = curW2;
+            const startTime = performance.now();
+            const dur = 180;
+
+            function animate(now) {
+                const elapsed = now - startTime;
+                const progress = Math.min(elapsed / dur, 1);
+                const ease = 1 - Math.pow(1 - progress, 3);
+                curW1 = startW1 + (nextW1 - startW1) * ease;
+                curW2 = startW2 + (nextW2 - startW2) * ease;
+                sliderW1.value = curW1;
+                sliderW2.value = curW2;
+                updateUI();
+
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    curW1 = nextW1;
+                    curW2 = nextW2;
+                    sliderW1.value = curW1;
+                    sliderW2.value = curW2;
+                    trajectory.push([curW1, curW2, lAfter]);
+                    updateUI();
+                }
+            }
+            requestAnimationFrame(animate);
+        });
+
+        // Reiniciar
+        btnResetMat.addEventListener('click', () => {
+            curW1 = 0.50;
+            curW2 = 1.00;
+            curAlpha = 0.05;
+            sliderW1.value = curW1;
+            sliderW2.value = curW2;
+            sliderAlpha.value = curAlpha;
+            trajectory = [[curW1, curW2, computeLoss(curW1, curW2)]];
+            stepBox.style.display = 'none';
+            updateUI();
+        });
+
+        // Inicializar gráfico 3D y estado
+        initPlot3D();
+        updateUI();
+    </script>
+</body>
+</html>
+"""
+
 
 def render_multivariable_lab(st):
-    """Renderiza el laboratorio con el visor de matrices y gráfico 3D/Contorno."""
-
-    # Inicializar estado
+    """Renderiza el laboratorio 2 con Plotly.js en el cliente (0 ms latencia, 60 FPS)."""
     X, Y, W_opt = get_default_dataset()
+    w1_opt = float(W_opt[0, 0])
+    w2_opt = float(W_opt[1, 0])
 
-    if "multi_w1" not in st.session_state:
-        st.session_state.multi_w1 = 0.5
-    if "multi_w2" not in st.session_state:
-        st.session_state.multi_w2 = 1.0
-    if "multi_alpha" not in st.session_state:
-        st.session_state.multi_alpha = 0.05
-    if "multi_history" not in st.session_state:
-        st.session_state.multi_history = []
-    if "view_mode" not in st.session_state:
-        st.session_state.view_mode = "3D (Superficie)"
+    # Precomputamos la malla de superficie de pérdida una sola vez en Python
+    W1, W2, Z = compute_loss_surface(X, Y, w1_center=w1_opt, w2_center=w2_opt, span=4.0, resolution=35)
 
-    w1 = float(st.session_state.multi_w1)
-    w2 = float(st.session_state.multi_w2)
-    alpha = float(st.session_state.multi_alpha)
-    W = np.array([[w1], [w2]], dtype=float)
-
-    # Cálculos en tiempo real
-    Y_pred = predict_matrix(X, W)
-    residuals = compute_residuals(X, Y, W)
-    mse_loss = compute_mse_loss(X, Y, W)
-    grad_vector = compute_gradient_vector(X, Y, W)
-
-    # 1. Barra de encabezado
-    st.markdown(
-        """
-        <div style="display: flex; align-items: baseline; justify-content: space-between; border-bottom: 1px solid #1F1F24; padding-bottom: 8px; margin-bottom: 14px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <h2 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: #F4F4F5;">
-                    Matrices y Superficie 3D de Pérdida
-                </h2>
-                <span style="font-family: monospace; font-size: 0.7rem; color: #A1A1AA; border: 1px solid #27272A; padding: 1px 6px; border-radius: 4px;">2 pesos</span>
-            </div>
-            <div style="font-family: monospace; font-size: 0.78rem; color: #38BDF8; background: #082F49; border: 1px solid #0369A1; padding: 2px 8px; border-radius: 4px;">
-                W* óptimo = [2.00, 3.00]ᵀ
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    rendered_html = (
+        HTML_MULTIVARIABLE_TEMPLATE
+        .replace("__INIT_W1__", "0.50")
+        .replace("__INIT_W2__", "1.00")
+        .replace("__INIT_ALPHA__", "0.050")
+        .replace("__GRID_W1__", json.dumps(W1.tolist()))
+        .replace("__GRID_W2__", json.dumps(W2.tolist()))
+        .replace("__GRID_Z__", json.dumps(Z.tolist()))
     )
 
-    # 2. Visor de Matrices Interactivo (Álgebra Lineal visual)
-    st.markdown(
-        """
-        <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #71717A; font-weight: 600; margin-bottom: 6px;">
-            Visor de Álgebra Matricial: ŷ = X · W
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Tabla visual estilizada para las matrices
-    c_x, c_mul, c_w, c_eq, c_ypred, c_y, c_err = st.columns([2.4, 0.4, 1.4, 0.4, 1.4, 1.4, 1.4])
-
-    with c_x:
-        st.markdown(
-            f"""
-            <div style="background: #121216; border: 1px solid #27272A; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.8rem;">
-                <div style="color: #71717A; font-size: 0.68rem; margin-bottom: 4px;">Matriz X (3x2)</div>
-                <div style="color: #E4E4E7;">[{X[0,0]:.1f}, {X[0,1]:.1f}]</div>
-                <div style="color: #E4E4E7;">[{X[1,0]:.1f}, {X[1,1]:.1f}]</div>
-                <div style="color: #E4E4E7;">[{X[2,0]:.1f}, {X[2,1]:.1f}]</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c_mul:
-        st.markdown("<div style='text-align: center; font-size: 1.3rem; color: #71717A; padding-top: 24px;'>&times;</div>", unsafe_allow_html=True)
-
-    with c_w:
-        st.markdown(
-            f"""
-            <div style="background: #121216; border: 1px solid #3B82F6; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.8rem;">
-                <div style="color: #3B82F6; font-size: 0.68rem; font-weight: 600; margin-bottom: 4px;">W (2x1)</div>
-                <div style="color: #38BDF8; font-weight: 600;">[{w1:.2f}]</div>
-                <div style="color: #38BDF8; font-weight: 600;">[{w2:.2f}]</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c_eq:
-        st.markdown("<div style='text-align: center; font-size: 1.3rem; color: #71717A; padding-top: 24px;'>=</div>", unsafe_allow_html=True)
-
-    with c_ypred:
-        st.markdown(
-            f"""
-            <div style="background: #121216; border: 1px solid #27272A; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.8rem;">
-                <div style="color: #71717A; font-size: 0.68rem; margin-bottom: 4px;">Pred ŷ (3x1)</div>
-                <div style="color: #E4E4E7;">[{Y_pred[0,0]:.2f}]</div>
-                <div style="color: #E4E4E7;">[{Y_pred[1,0]:.2f}]</div>
-                <div style="color: #E4E4E7;">[{Y_pred[2,0]:.2f}]</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c_y:
-        st.markdown(
-            f"""
-            <div style="background: #121216; border: 1px solid #27272A; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.8rem;">
-                <div style="color: #71717A; font-size: 0.68rem; margin-bottom: 4px;">Obj Y (3x1)</div>
-                <div style="color: #A1A1AA;">[{Y[0,0]:.1f}]</div>
-                <div style="color: #A1A1AA;">[{Y[1,0]:.1f}]</div>
-                <div style="color: #A1A1AA;">[{Y[2,0]:.1f}]</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c_err:
-        st.markdown(
-            f"""
-            <div style="background: #121216; border: 1px solid #27272A; border-radius: 6px; padding: 8px 10px; font-family: monospace; font-size: 0.8rem;">
-                <div style="color: #71717A; font-size: 0.68rem; margin-bottom: 4px;">Error E (3x1)</div>
-                <div style="color: #F87171;">[{residuals[0,0]:+.2f}]</div>
-                <div style="color: #F87171;">[{residuals[1,0]:+.2f}]</div>
-                <div style="color: #F87171;">[{residuals[2,0]:+.2f}]</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
-
-    # 3. Disposición en dos columnas: Gráfico Espacial (izq) y Panel de Control (der)
-    col_chart, col_controls = st.columns([1.5, 1.0], gap="medium")
-
-    with col_controls:
-        # Selector de vista
-        view_opt = st.radio(
-            "Perspectiva geométrica:",
-            options=["3D (Superficie)", "2D (Curvas de Nivel)"],
-            horizontal=True,
-            label_visibility="collapsed",
-            key="radio_view_mode",
-        )
-
-        st.markdown(
-            """
-            <div style="font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #71717A; font-weight: 600; margin: 4px 0;">
-                Ajuste de Pesos
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Sliders de w1 y w2
-        new_w1 = st.slider(
-            "Peso w1",
-            min_value=-2.0,
-            max_value=6.0,
-            value=float(w1),
-            step=0.05,
-            key="slider_w1",
-            help="Modifica el peso w1 asignado a la primera característica."
-        )
-        new_w2 = st.slider(
-            "Peso w2",
-            min_value=-2.0,
-            max_value=7.0,
-            value=float(w2),
-            step=0.05,
-            key="slider_w2",
-            help="Modifica el peso w2 asignado a la segunda característica."
-        )
-        new_alpha = st.slider(
-            "Tasa de aprendizaje (α)",
-            min_value=0.005,
-            max_value=0.20,
-            value=float(alpha),
-            step=0.005,
-            format="%.3f",
-            key="slider_multi_alpha",
-        )
-
-        st.session_state.multi_w1 = new_w1
-        st.session_state.multi_w2 = new_w2
-        st.session_state.multi_alpha = new_alpha
-
-        # Botones de acción
-        b1, b2 = st.columns([1.3, 1.0])
-        with b1:
-            step_btn = st.button("Ejecutar paso matricial", type="primary", use_container_width=True)
-        with b2:
-            reset_btn = st.button("Reiniciar", type="secondary", use_container_width=True)
-
-        if reset_btn:
-            st.session_state.multi_w1 = 0.5
-            st.session_state.multi_w2 = 1.0
-            st.session_state.multi_alpha = 0.05
-            st.session_state.multi_history = []
-            st.rerun()
-
-        if step_btn:
-            # Registrar posición previa en historial
-            if not st.session_state.multi_history:
-                st.session_state.multi_history.append((w1, w2, mse_loss))
-
-            W_new, grad_step, l_prev, l_after = multivariable_gradient_descent_step(X, Y, W, new_alpha)
-            new_w1_val = float(W_new[0, 0])
-            new_w2_val = float(W_new[1, 0])
-
-            st.session_state.multi_w1 = new_w1_val
-            st.session_state.multi_w2 = new_w2_val
-            st.session_state.multi_history.append((new_w1_val, new_w2_val, l_after))
-            st.rerun()
-
-        # Métricas resumidas
-        m_col1, m_col2 = st.columns(2)
-        with m_col1:
-            st.metric(
-                label="Pérdida MSE",
-                value=f"{mse_loss:.2f}",
-                delta=f"Dist a W*: {np.linalg.norm(W - W_opt):.2f}",
-                delta_color="off",
-            )
-        with m_col2:
-            grad_norm = float(np.linalg.norm(grad_vector))
-            st.metric(
-                label="||∇L|| (Magnitud)",
-                value=f"{grad_norm:.2f}",
-                delta=f"∇ = [{grad_vector[0,0]:+.1f}, {grad_vector[1,0]:+.1f}]",
-                delta_color="off",
-            )
-
-    # 4. Columna gráfica (3D o Contorno)
-    with col_chart:
-        history = st.session_state.multi_history
-        if view_opt == "3D (Superficie)":
-            fig3d = create_3d_loss_surface_chart(X, Y, W, W_opt, trajectory=history)
-            st.plotly_chart(fig3d, use_container_width=True, config={"displayModeBar": False})
-        else:
-            fig_cont = create_contour_loss_chart(X, Y, W, W_opt, grad_vector, trajectory=history)
-            st.plotly_chart(fig_cont, use_container_width=True, config={"displayModeBar": False})
-
-    # 5. Explicación del cálculo matricial
-    st.markdown(
-        f"""
-        <div style="background: #121216; border: 1px solid #1F1F24; border-radius: 6px; padding: 10px 14px; font-size: 0.8rem; color: #A1A1AA; line-height: 1.5; margin-top: 4px;">
-            <b style="color: #F4F4F5;">Fórmula del Gradiente Matricial:</b> 
-            <code>∇_W L = (2/N) · Xᵀ · E = (2/3) · Xᵀ · (ŷ - Y)</code><br>
-            Vector actual: <b>∇_W L = [{grad_vector[0,0]:+.3f}, {grad_vector[1,0]:+.3f}]ᵀ</b>. 
-            La regla matricial resta este vector: <code>W_nuevo = W - α · ∇_W L</code>, desplazando simultáneamente ambos pesos hacia el fondo del cuenco (W* = [2.0, 3.0]).
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    # Altura compacta ajustada al diseño sin scrollbar
+    components.html(rendered_html, height=540, scrolling=False)
