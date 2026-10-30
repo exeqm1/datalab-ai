@@ -141,6 +141,48 @@ HTML_TEMPLATE = """
             font-weight: 500;
         }
 
+        /* Visor de Matrices Interactivo */
+        .matrix-board {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #0D0D11;
+            border: 1px solid #1F1F24;
+            border-radius: 6px;
+            padding: 8px 12px;
+            overflow-x: auto;
+        }
+        .matrix-box {
+            background: #121216;
+            border: 1px solid #27272A;
+            border-radius: 5px;
+            padding: 6px 10px;
+            font-family: ui-monospace, monospace;
+            font-size: 0.76rem;
+            min-width: 80px;
+        }
+        .matrix-box.active-w {
+            border-color: #3B82F6;
+        }
+        .matrix-label {
+            font-size: 0.65rem;
+            color: #71717A;
+            font-weight: 600;
+            margin-bottom: 3px;
+        }
+        .matrix-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            color: #E4E4E7;
+            line-height: 1.35;
+        }
+        .matrix-op {
+            font-size: 1.1rem;
+            color: #71717A;
+            font-weight: 500;
+        }
+
         /* Grid balanceado en dos columnas */
         .workspace-grid {
             display: grid;
@@ -164,7 +206,7 @@ HTML_TEMPLATE = """
         }
         canvas {
             width: 100%;
-            height: 330px;
+            height: 280px;
             display: block;
             cursor: crosshair;
         }
@@ -378,9 +420,50 @@ HTML_TEMPLATE = """
             <div class="top-left">
                 <span class="title">Descenso del Gradiente</span>
                 <span class="badge">1 Peso</span>
-                <span class="badge">x = __X__ &bull; y = __Y__</span>
+                <span class="badge">ŷ = X · W</span>
             </div>
             <span class="badge badge-opt">Óptimo w* = 5.00</span>
+        </div>
+
+        <!-- Visor de Matrices Interactivo (1D) -->
+        <div class="matrix-board">
+            <!-- Matriz X -->
+            <div class="matrix-box">
+                <div class="matrix-label">Matriz X (1&times;1)</div>
+                <div class="matrix-row"><span>__X__</span></div>
+            </div>
+
+            <div class="matrix-op">&times;</div>
+
+            <!-- Vector W -->
+            <div class="matrix-box active-w">
+                <div class="matrix-label" style="color: #3B82F6;">W (1&times;1)</div>
+                <div class="matrix-row"><span id="mW" style="color: #38BDF8; font-weight: 600;">__INIT_W__</span></div>
+            </div>
+
+            <div class="matrix-op">=</div>
+
+            <!-- Vector ŷ -->
+            <div class="matrix-box">
+                <div class="matrix-label">Pred ŷ (1&times;1)</div>
+                <div class="matrix-row"><span id="mYp">2.00</span></div>
+            </div>
+
+            <div class="matrix-op">vs</div>
+
+            <!-- Vector Y -->
+            <div class="matrix-box">
+                <div class="matrix-label">Obj Y (1&times;1)</div>
+                <div class="matrix-row"><span>__Y__</span></div>
+            </div>
+
+            <div class="matrix-op">&rarr;</div>
+
+            <!-- Vector E -->
+            <div class="matrix-box">
+                <div class="matrix-label" style="color: #F87171;">Error E (1&times;1)</div>
+                <div class="matrix-row"><span id="mE" style="color: #F87171;">-8.00</span></div>
+            </div>
         </div>
 
         <!-- Disposición en 2 Columnas -->
@@ -490,6 +573,10 @@ HTML_TEMPLATE = """
         const alphaDisplay = document.getElementById('alphaDisplay');
         const btnStep = document.getElementById('btnStep');
         const btnReset = document.getElementById('btnReset');
+
+        const mW = document.getElementById('mW');
+        const mYp = document.getElementById('mYp');
+        const mE = document.getElementById('mE');
 
         const metricW = document.getElementById('metricW');
         const metricWDelta = document.getElementById('metricWDelta');
@@ -685,6 +772,11 @@ HTML_TEMPLATE = """
             wDisplay.textContent = currentW.toFixed(2);
             alphaDisplay.textContent = currentAlpha.toFixed(3);
 
+            if (mW) mW.textContent = currentW.toFixed(2);
+            if (mYp) mYp.textContent = yPred.toFixed(2);
+            const errVal = yPred - y_obs;
+            if (mE) mE.textContent = (errVal >= 0 ? '+' : '') + errVal.toFixed(2);
+
             metricW.textContent = currentW.toFixed(2);
             metricWDelta.textContent = (diffOpt >= 0 ? '+' : '') + diffOpt.toFixed(2) + ' a w*';
             metricYPred.textContent = yPred.toFixed(2);
@@ -800,5 +892,5 @@ def render_gradient_descent_lab(st, charts_module=None):
         .replace("__X__", "2.0")
         .replace("__Y__", "10.0")
     )
-    # 540px es la altura ideal para contener todo el panel sin barras de desplazamiento
-    components.html(rendered_html, height=540, scrolling=False)
+    # 590px permite que el visor de matrices y las tarjetas encajen holgadamente
+    components.html(rendered_html, height=590, scrolling=False)

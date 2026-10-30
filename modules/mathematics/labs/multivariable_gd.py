@@ -250,7 +250,7 @@ HTML_MULTIVARIABLE_TEMPLATE = """
         }
         #plotDiv {
             width: 100%;
-            height: 340px;
+            height: 280px;
         }
 
         .math-banner {
@@ -957,5 +957,5 @@ def render_multivariable_lab(st):
         .replace("__GRID_Z__", json.dumps(Z.tolist()))
     )
 
-    # Altura compacta ajustada al diseño sin scrollbar
-    components.html(rendered_html, height=540, scrolling=False)
+    # Altura ajustada con margen para evitar cortes
+    components.html(rendered_html, height=590, scrolling=False)
