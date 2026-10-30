@@ -1,4 +1,4 @@
-# DataLab AI 🧪
+# DataLab AI 
 
 Plataforma interactiva para aprender, experimentar y visualizar conceptos matemáticos y algoritmos de Inteligencia Artificial y Machine Learning.
 
@@ -17,7 +17,7 @@ Optimización analítica para $y = w \cdot x$ con pérdida cuadrática sobre un 
 
 ---
 
-## 🚀 Cómo ejecutar la aplicación
+## Cómo ejecutar la aplicación
 
 1. **Instalar dependencias:**
    ```bash
