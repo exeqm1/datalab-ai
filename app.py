@@ -29,10 +29,35 @@ st.markdown(
             color: #F4F4F5;
         }
 
-        /* Ocultar navbar y footer de Streamlit que comen espacio de pantalla */
-        header[data-testid="stHeader"], footer, #MainMenu {
+        /* Barra superior transparente sin bloquear los controles de la barra lateral */
+        header[data-testid="stHeader"] {
+            background-color: transparent !important;
+            height: 2.2rem !important;
+            z-index: 99 !important;
+        }
+
+        /* Ocultar elementos innecesarios (menú y footer) */
+        #MainMenu, footer {
             display: none !important;
             height: 0 !important;
+        }
+
+        /* Botón para abrir la barra lateral cuando está oculta (siempre visible y accesible) */
+        [data-testid="collapsedControl"] {
+            display: flex !important;
+            visibility: visible !important;
+            color: #F4F4F5 !important;
+            background-color: #121216 !important;
+            border: 1px solid #27272A !important;
+            border-radius: 6px !important;
+            padding: 3px !important;
+            margin-top: 4px !important;
+            margin-left: 8px !important;
+            transition: all 0.15s ease !important;
+        }
+        [data-testid="collapsedControl"]:hover {
+            border-color: #3B82F6 !important;
+            background-color: #18181B !important;
         }
 
         /* Contenedor principal ajustado a pantalla completa */
